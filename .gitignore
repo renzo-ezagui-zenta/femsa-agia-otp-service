@@ -21,3 +21,4 @@ shared-local-instance.db
 *.db
 .cocoindex_code
 CREDENTIALS.md
+coverage
