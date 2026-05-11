@@ -1,0 +1,23 @@
+# Node and System
+node_modules/
+.DS_Store
+*.log
+.env
+logs/
+docker/
+
+# Builds
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+
+# Submodule directories are managed by git
+
+# Local Databases
+shared-local-instance.db
+*.db
+.cocoindex_code
+CREDENTIALS.md
