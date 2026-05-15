@@ -1,12 +1,11 @@
 import { Module } from '@nestjs/common';
 import { TerminusModule } from '@nestjs/terminus';
-import { ValkeyModule } from '../../shared/valkey/valkey.module';
 import { HealthController } from './health.controller';
-import { ValkeyHealthIndicator } from './indicators/valkey.health-indicator';
+import { DynamoDbHealthIndicator } from './indicators/dynamodb.health-indicator';
 
 @Module({
-  imports: [TerminusModule, ValkeyModule],
+  imports: [TerminusModule],
   controllers: [HealthController],
-  providers: [ValkeyHealthIndicator],
+  providers: [DynamoDbHealthIndicator],
 })
 export class HealthModule {}

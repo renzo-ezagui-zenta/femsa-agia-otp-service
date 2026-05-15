@@ -12,9 +12,9 @@ Guidance for Claude Code when working in this service.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/otp/send` | Generates a 6-digit OTP, stores a session in Valkey, and delivers the code via AWS SES (email) or AWS End User Messaging / Pinpoint (SMS) |
-| `POST` | `/otp/verify` | Validates a `sessionId` + `code` pair; marks the session verified on success or deletes it immediately on failure |
-| `GET` | `/health` | Terminus health check — pings Valkey |
+| `POST` | `/otp/send` | Generates a 6-digit OTP, stores an encrypted session in DynamoDB, and delivers the code via AWS SES (email) or AWS End User Messaging / Pinpoint (SMS) |
+| `POST` | `/otp/verify` | Validates a `sessionId` + `code` pair; deletes the session immediately on both success and failure (single-use) |
+| `GET` | `/health` | Terminus health check — calls DescribeTable on DynamoDB |
 | `GET` | `/api` | Swagger UI (non-production only) |
 
 ---
@@ -26,8 +26,6 @@ Guidance for Claude Code when working in this service.
 | Local (`make otp`) | **3004** |
 | Docker (host-side) | **3004** → container 3000 |
 | K8s service (`mcp-dev`) | **3000** |
-| Valkey (local) | `localhost:6381` (Docker host mapping) |
-| Valkey (Docker/K8s) | `valkey:6379` (internal network) |
 
 ---
 
@@ -37,9 +35,12 @@ All vars are validated at startup via Zod (`src/env.schema.ts`). The service ref
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `VALKEY_URL` | yes | — | Redis-compatible URL. Local: `redis://localhost:6381`. Docker: `redis://valkey:6379` |
-| `OTP_TTL_SECONDS` | no | `300` | Session TTL in Valkey (5 min default) |
-| `AWS_REGION` | yes | — | AWS region for SES and EUM clients |
+| `DYNAMODB_TABLE_NAME` | yes | — | DynamoDB table for OTP sessions. Prod: `mcp-femsa-dev-otp-sessions` |
+| `DYNAMODB_ENDPOINT` | no | — | Optional endpoint override (e.g. `http://localhost:8000` for local DynamoDB) |
+| `OTP_TTL_SECONDS` | no | `300` | Session TTL in seconds (5 min default) |
+| `OTP_HMAC_SECRET` | yes | — | Min 32 chars. Used for HMAC-SHA256 of the OTP before storing |
+| `OTP_ENCRYPTION_KEY` | yes | — | Exactly 64 hex chars (32 bytes). AES-256-GCM key for encrypting customer data |
+| `AWS_REGION` | yes | — | AWS region for DynamoDB, SES and EUM clients |
 | `AWS_PROFILE` | no | — | AWS SSO profile for local dev (e.g. `femsa`). Not used in EKS (IAM role) |
 | `SES_FROM_ADDRESS` | yes | — | Verified SES sender address |
 | `EUM_ORIGINATION_IDENTITY` | conditional | — | Pinpoint origination phone number. Required unless `EUM_MOCK=true` |
@@ -69,10 +70,15 @@ Caller → { customer: { id, name, phone, mail }, requestedVia: "mail" | "phone"
 | `phone` | Email → mail | AWS SES |
 | `id` | SMS → phone | AWS EUM (default) |
 
-The session is stored in Valkey as:
-- Key: `otp:session:<uuid>`
-- Value: JSON of `OtpSession` entity (`{ sessionId, customerId, code, channel, verified: false, expiresAt }`)
-- TTL: `OTP_TTL_SECONDS`
+The session is stored in DynamoDB (`mcp-femsa-dev-otp-sessions`) as:
+```
+{
+  sessionId:          UUID (PK)
+  otpHash:            HMAC-SHA256(otp, OTP_HMAC_SECRET)
+  customerEncrypted:  AES-256-GCM(JSON.stringify(customer), OTP_ENCRYPTION_KEY)
+  expiresAt:          Unix epoch seconds (DynamoDB TTL attribute)
+}
+```
 
 Returns `201` with `{ sessionId, expiresAt, customer, sentTo: { channel, value } }`.
 
@@ -84,9 +90,14 @@ Caller → { sessionId: "<uuid>", code: "123456" }
 
 | Outcome | HTTP | Behaviour |
 |---------|------|-----------|
-| Session not found / expired | `404` `SESSION_NOT_FOUND` | — |
-| Code incorrect | `400` `INVALID_CODE` | Session is **deleted immediately** (single attempt, no retries) |
-| Code correct | `200` `{ ok: true, sessionId }` | Session marked `verified: true`, re-saved with same TTL |
+| Session not found | `404` `SESSION_NOT_FOUND` | — |
+| Session expired | `410` `SESSION_EXPIRED` | Adapter deletes the item immediately |
+| Code incorrect | `400` `INVALID_CODE` | Session **deleted immediately** (single attempt, no retries) |
+| Customer data corrupted | `400` `SESSION_CORRUPTED` | Session **deleted immediately** |
+| Code correct | `200` `{ ok: true, sessionId, customer }` | Session **deleted immediately** (delete-on-use) |
+
+**Security**: sessions are deleted on both success and failure — no re-use possible.
+**Expiry defense**: `findById` checks `expiresAt` in application code — does not rely on DynamoDB TTL lazy deletion (can take up to 48h).
 
 ---
 
@@ -99,14 +110,15 @@ src/
 ├── modules/otp/
 │   ├── domain/
 │   │   ├── entities/otp-session.entity.ts   ← pure domain, no framework imports
-│   │   └── ports/                           ← interfaces only
+│   │   └── ports/                           ← interfaces only (save/findById/delete)
 │   ├── application/use-cases/               ← business logic, injected via Symbol tokens
 │   └── infrastructure/
 │       ├── http/otp.controller.ts           ← NestJS HTTP layer
-│       └── adapters/                        ← SES, EUM, Valkey implementations
+│       └── adapters/                        ← SES, EUM, DynamoDB implementations
 └── shared/
     ├── pipes/zod-validation.pipe.ts         ← wraps Zod safeParse as NestJS pipe
-    └── valkey/valkey.service.ts             ← ioredis wrapper
+    ├── crypto/otp-crypto.ts                 ← computeHmac(), encrypt(), decrypt()
+    └── dynamodb/                            ← DynamoDBProvider + DynamoDbModule
 ```
 
 DI injection tokens live in `src/modules/otp/tokens.ts`.
@@ -116,9 +128,12 @@ DI injection tokens live in `src/modules/otp/tokens.ts`.
 ## Security Notes
 
 - OTP generated with `node:crypto.randomInt(0, 1_000_000)` — CSPRNG, never `Math.random()`
+- OTP stored as `HMAC-SHA256(otp, OTP_HMAC_SECRET)` — never in plaintext in DynamoDB
+- Customer PII stored as `AES-256-GCM(customer, OTP_ENCRYPTION_KEY)` — opaque to DB-level access
+- Single-use: session deleted on both correct and incorrect verification attempt
+- `expiresAt` enforced in application code — does not trust DynamoDB TTL alone
 - The OTP value is **always `[REDACTED]`** in structured logs (both SES and EUM adapters)
 - OTP only appears as plain text in `EUM_MOCK=true` console output (dev only)
-- Single-attempt verification: a wrong code immediately destroys the session
 
 ---
 
@@ -126,11 +141,22 @@ DI injection tokens live in `src/modules/otp/tokens.ts`.
 
 | Service | Purpose | SDK |
 |---------|---------|-----|
+| **AWS DynamoDB** | OTP session persistence (encrypted) | `@aws-sdk/client-dynamodb`, `@aws-sdk/lib-dynamodb` |
 | **AWS SES** | Email OTP delivery | `@aws-sdk/client-ses` |
 | **AWS End User Messaging (Pinpoint SMS Voice V2)** | SMS OTP delivery | `@aws-sdk/client-pinpoint-sms-voice-v2` |
-| **Valkey** (shared with `server`) | Session persistence with TTL | `ioredis` |
 
-No Cognito, no SQS, no DynamoDB — sessions are entirely ephemeral in Valkey.
+No Cognito, no SQS, no Valkey.
+
+---
+
+## DynamoDB Table
+
+**Table name**: `mcp-femsa-dev-otp-sessions`
+**PK**: `sessionId` (String, UUID)
+**TTL attribute**: `expiresAt` (Number, Unix epoch seconds)
+**Billing**: PAY_PER_REQUEST
+
+Created by `make init-db` (also enables TTL automatically).
 
 ---
 
@@ -150,13 +176,3 @@ REQUESTED_VIA=id    make test-otp-e2e   # OTP delivered via SMS mock
 ```
 
 E2E log output: `logs/otp_service_e2e.log`
-
----
-
-## Valkey Key Pattern
-
-```
-otp:session:<uuid>   TTL = OTP_TTL_SECONDS (default 300s)
-```
-
-The `server` service also uses this Valkey instance for tool-response caching, but with a different key prefix — no collision.

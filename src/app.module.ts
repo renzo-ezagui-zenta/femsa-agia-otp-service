@@ -5,6 +5,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { LoggerModule } from 'nestjs-pino';
 import { OtpModule } from './modules/otp/otp.module';
 import { HealthModule } from './modules/health/health.module';
+import { DynamoDbModule } from './shared/dynamodb/dynamodb.module';
 import { validateEnv } from './env.schema';
 
 @Module({
@@ -55,6 +56,7 @@ import { validateEnv } from './env.schema';
     }),
     OtpModule,
     HealthModule,
+    DynamoDbModule,
   ],
 })
 export class AppModule {}

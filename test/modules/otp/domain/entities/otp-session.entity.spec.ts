@@ -48,11 +48,6 @@ describe('OtpSession', () => {
       expect(session.otp).toBe('042000');
     });
 
-    it('verified es false en la creación', () => {
-      const session = OtpSession.create(CUSTOMER, 'id', 300, '123456');
-      expect(session.verified).toBe(false);
-    });
-
     it('expiresAt es aproximadamente ahora + ttlSeconds', () => {
       const before = Date.now();
       const session = OtpSession.create(CUSTOMER, 'id', 300, '123456');
@@ -60,6 +55,13 @@ describe('OtpSession', () => {
       const expiresMs = session.expiresAt.getTime();
       expect(expiresMs).toBeGreaterThanOrEqual(before + 300 * 1000);
       expect(expiresMs).toBeLessThanOrEqual(after + 300 * 1000);
+    });
+
+    it('expiresAtEpoch es expiresAt en segundos Unix', () => {
+      const session = OtpSession.create(CUSTOMER, 'id', 300, '123456');
+      expect(session.expiresAtEpoch).toBe(
+        Math.floor(session.expiresAt.getTime() / 1000),
+      );
     });
 
     it('copia el customer sin mutación', () => {
@@ -85,27 +87,6 @@ describe('OtpSession', () => {
         expect(session.deliveryChannel).toBe('sms');
         expect(session.requestedVia).toBe('id');
       });
-    });
-  });
-
-  describe('toData()', () => {
-    it('serializa los campos correctos', () => {
-      const session = OtpSession.create(CUSTOMER, 'phone', 300, '123456');
-      const data = session.toData();
-      expect(data).toEqual({
-        customer: CUSTOMER,
-        requestedVia: 'phone',
-        deliveryChannel: 'mail',
-        otp: '123456',
-        verified: false,
-      });
-    });
-
-    it('no incluye sessionId ni expiresAt', () => {
-      const session = OtpSession.create(CUSTOMER, 'id', 300, '123456');
-      const data = session.toData();
-      expect(data).not.toHaveProperty('sessionId');
-      expect(data).not.toHaveProperty('expiresAt');
     });
   });
 });
