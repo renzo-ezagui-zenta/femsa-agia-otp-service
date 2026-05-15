@@ -32,7 +32,7 @@ export class OtpController {
   @ApiOperation({
     summary: 'Enviar OTP',
     description:
-      'Genera un OTP de 6 dígitos, lo persiste en Valkey con TTL configurable ' +
+      'Genera un OTP de 6 dígitos, lo persiste en DynamoDB con TTL configurable ' +
       'y lo envía al cliente por el canal correspondiente (lógica de canal cruzado).',
   })
   @ApiBody({ schema: toOpenApiSchema(SendOtpSchema) })
@@ -56,8 +56,8 @@ export class OtpController {
     summary: 'Verificar OTP',
     description:
       'Verifica el código OTP contra la sesión activa. ' +
-      'Un intento incorrecto elimina la sesión inmediatamente (sin reintentos). ' +
-      'Una sesión ya verificada o inexistente devuelve 404.',
+      'La sesión es eliminada inmediatamente tanto en éxito como en fallo (single-use, sin reintentos). ' +
+      'Una sesión inexistente o ya consumida devuelve 404; una sesión expirada devuelve 410.',
   })
   @ApiBody({ schema: toOpenApiSchema(VerifyOtpSchema) })
   @ApiResponse({
@@ -78,7 +78,12 @@ export class OtpController {
   })
   @ApiResponse({
     status: 404,
-    description: 'Sesión no encontrada o ya verificada.',
+    description: 'Sesión no encontrada o ya consumida.',
+    schema: toOpenApiSchema(ErrorResponseSchema),
+  })
+  @ApiResponse({
+    status: 410,
+    description: 'Sesión expirada — ya no está disponible.',
     schema: toOpenApiSchema(ErrorResponseSchema),
   })
   verify(@Body(new ZodValidationPipe(VerifyOtpSchema)) dto: VerifyOtpDto) {

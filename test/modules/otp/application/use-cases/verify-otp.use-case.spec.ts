@@ -38,7 +38,7 @@ function buildFoundResult(expiresOffset = 300) {
 function makeUseCase() {
   const sessionRepo: jest.Mocked<OtpSessionRepositoryPort> = {
     save: jest.fn().mockResolvedValue(undefined),
-    findById: jest.fn(),
+    consumeById: jest.fn(),
     delete: jest.fn().mockResolvedValue(undefined),
   };
   const configService = {
@@ -48,14 +48,18 @@ function makeUseCase() {
       throw new Error(`Unexpected config key: ${key}`);
     }),
   } as any;
-  const useCase = new VerifyOtpUseCase(mockLogger(), sessionRepo, configService);
+  const useCase = new VerifyOtpUseCase(
+    mockLogger(),
+    sessionRepo,
+    configService,
+  );
   return { useCase, sessionRepo };
 }
 
 describe('VerifyOtpUseCase', () => {
-  it('lanza NotFoundException cuando la sesión no existe', async () => {
+  it('lanza NotFoundException cuando consumeById retorna not_found', async () => {
     const { useCase, sessionRepo } = makeUseCase();
-    sessionRepo.findById.mockResolvedValueOnce({ status: 'not_found' });
+    sessionRepo.consumeById.mockResolvedValueOnce({ status: 'not_found' });
     await expect(
       useCase.execute({ sessionId: SESSION_ID, code: CORRECT_CODE }),
     ).rejects.toThrow(NotFoundException);
@@ -63,15 +67,15 @@ describe('VerifyOtpUseCase', () => {
 
   it('el error de sesión no encontrada tiene error=SESSION_NOT_FOUND', async () => {
     const { useCase, sessionRepo } = makeUseCase();
-    sessionRepo.findById.mockResolvedValueOnce({ status: 'not_found' });
+    sessionRepo.consumeById.mockResolvedValueOnce({ status: 'not_found' });
     await expect(
       useCase.execute({ sessionId: SESSION_ID, code: CORRECT_CODE }),
     ).rejects.toMatchObject({ response: { error: 'SESSION_NOT_FOUND' } });
   });
 
-  it('lanza GoneException cuando la sesión está expirada', async () => {
+  it('lanza GoneException cuando consumeById retorna expired', async () => {
     const { useCase, sessionRepo } = makeUseCase();
-    sessionRepo.findById.mockResolvedValueOnce({ status: 'expired' });
+    sessionRepo.consumeById.mockResolvedValueOnce({ status: 'expired' });
     await expect(
       useCase.execute({ sessionId: SESSION_ID, code: CORRECT_CODE }),
     ).rejects.toThrow(GoneException);
@@ -79,33 +83,26 @@ describe('VerifyOtpUseCase', () => {
 
   it('el error de sesión expirada tiene error=SESSION_EXPIRED', async () => {
     const { useCase, sessionRepo } = makeUseCase();
-    sessionRepo.findById.mockResolvedValueOnce({ status: 'expired' });
+    sessionRepo.consumeById.mockResolvedValueOnce({ status: 'expired' });
     await expect(
       useCase.execute({ sessionId: SESSION_ID, code: CORRECT_CODE }),
     ).rejects.toMatchObject({ response: { error: 'SESSION_EXPIRED' } });
   });
 
-  it('no llama delete cuando la sesión no existe', async () => {
+  it('nunca llama delete directamente — consumeById ya borró la sesión', async () => {
     const { useCase, sessionRepo } = makeUseCase();
-    sessionRepo.findById.mockResolvedValueOnce({ status: 'not_found' });
+    sessionRepo.consumeById.mockResolvedValueOnce({ status: 'not_found' });
     try {
       await useCase.execute({ sessionId: SESSION_ID, code: CORRECT_CODE });
-    } catch { /* expected */ }
-    expect(sessionRepo.delete).not.toHaveBeenCalled();
-  });
-
-  it('no llama delete cuando la sesión está expirada (ya la borró el adapter)', async () => {
-    const { useCase, sessionRepo } = makeUseCase();
-    sessionRepo.findById.mockResolvedValueOnce({ status: 'expired' });
-    try {
-      await useCase.execute({ sessionId: SESSION_ID, code: CORRECT_CODE });
-    } catch { /* expected */ }
+    } catch {
+      /* expected */
+    }
     expect(sessionRepo.delete).not.toHaveBeenCalled();
   });
 
   it('lanza BadRequestException cuando el código es incorrecto', async () => {
     const { useCase, sessionRepo } = makeUseCase();
-    sessionRepo.findById.mockResolvedValueOnce(buildFoundResult());
+    sessionRepo.consumeById.mockResolvedValueOnce(buildFoundResult());
     await expect(
       useCase.execute({ sessionId: SESSION_ID, code: '000000' }),
     ).rejects.toThrow(BadRequestException);
@@ -113,61 +110,53 @@ describe('VerifyOtpUseCase', () => {
 
   it('el error de código incorrecto tiene error=INVALID_CODE', async () => {
     const { useCase, sessionRepo } = makeUseCase();
-    sessionRepo.findById.mockResolvedValueOnce(buildFoundResult());
+    sessionRepo.consumeById.mockResolvedValueOnce(buildFoundResult());
     await expect(
       useCase.execute({ sessionId: SESSION_ID, code: '000000' }),
     ).rejects.toMatchObject({ response: { error: 'INVALID_CODE' } });
   });
 
-  it('elimina la sesión cuando el código es incorrecto', async () => {
+  it('no llama delete cuando el código es incorrecto — consumeById ya borró', async () => {
     const { useCase, sessionRepo } = makeUseCase();
-    sessionRepo.findById.mockResolvedValueOnce(buildFoundResult());
+    sessionRepo.consumeById.mockResolvedValueOnce(buildFoundResult());
     try {
       await useCase.execute({ sessionId: SESSION_ID, code: '000000' });
-    } catch { /* expected */ }
-    expect(sessionRepo.delete).toHaveBeenCalledWith(SESSION_ID);
+    } catch {
+      /* expected */
+    }
+    expect(sessionRepo.delete).not.toHaveBeenCalled();
   });
 
   it('retorna { ok: true, sessionId, customer } con código correcto', async () => {
     const { useCase, sessionRepo } = makeUseCase();
-    sessionRepo.findById.mockResolvedValueOnce(buildFoundResult());
+    sessionRepo.consumeById.mockResolvedValueOnce(buildFoundResult());
     const result = await useCase.execute({
       sessionId: SESSION_ID,
       code: CORRECT_CODE,
     });
-    expect(result).toEqual({ ok: true, sessionId: SESSION_ID, customer: CUSTOMER });
+    expect(result).toEqual({
+      ok: true,
+      sessionId: SESSION_ID,
+      customer: CUSTOMER,
+    });
   });
 
-  it('elimina la sesión en éxito (delete-on-use)', async () => {
+  it('no llama delete en éxito — consumeById ya borró la sesión', async () => {
     const { useCase, sessionRepo } = makeUseCase();
-    sessionRepo.findById.mockResolvedValueOnce(buildFoundResult());
+    sessionRepo.consumeById.mockResolvedValueOnce(buildFoundResult());
     await useCase.execute({ sessionId: SESSION_ID, code: CORRECT_CODE });
-    expect(sessionRepo.delete).toHaveBeenCalledWith(SESSION_ID);
-    expect(sessionRepo.delete).toHaveBeenCalledTimes(1);
+    expect(sessionRepo.delete).not.toHaveBeenCalled();
   });
 
   it('lanza BadRequestException con SESSION_CORRUPTED si customerEncrypted es inválido', async () => {
     const { useCase, sessionRepo } = makeUseCase();
     const found = buildFoundResult();
-    sessionRepo.findById.mockResolvedValueOnce({
+    sessionRepo.consumeById.mockResolvedValueOnce({
       ...found,
       data: { ...found.data, customerEncrypted: 'datos-corruptos' },
     });
     await expect(
       useCase.execute({ sessionId: SESSION_ID, code: CORRECT_CODE }),
     ).rejects.toMatchObject({ response: { error: 'SESSION_CORRUPTED' } });
-  });
-
-  it('elimina la sesión cuando customerEncrypted es inválido', async () => {
-    const { useCase, sessionRepo } = makeUseCase();
-    const found = buildFoundResult();
-    sessionRepo.findById.mockResolvedValueOnce({
-      ...found,
-      data: { ...found.data, customerEncrypted: 'datos-corruptos' },
-    });
-    try {
-      await useCase.execute({ sessionId: SESSION_ID, code: CORRECT_CODE });
-    } catch { /* expected */ }
-    expect(sessionRepo.delete).toHaveBeenCalledWith(SESSION_ID);
   });
 });

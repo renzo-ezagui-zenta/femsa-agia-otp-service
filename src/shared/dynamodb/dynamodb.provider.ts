@@ -1,10 +1,10 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { ConfigService } from '@nestjs/config';
 
 @Injectable()
-export class DynamoDBProvider implements OnModuleInit {
+export class DynamoDBProvider implements OnModuleInit, OnModuleDestroy {
   private rawClient: DynamoDBClient;
   private documentClient: DynamoDBDocumentClient;
 
@@ -20,6 +20,10 @@ export class DynamoDBProvider implements OnModuleInit {
     });
 
     this.documentClient = DynamoDBDocumentClient.from(this.rawClient);
+  }
+
+  onModuleDestroy(): void {
+    this.rawClient?.destroy();
   }
 
   /** Cliente de alto nivel para operaciones CRUD (Get, Put, Delete, Query) */
