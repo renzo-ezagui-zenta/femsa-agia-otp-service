@@ -15,7 +15,7 @@ function makeIndicator(tableName = 'mcp-femsa-dev-otp-sessions') {
 }
 
 describe('DynamoDbHealthIndicator', () => {
-  it('retorna status up cuando DescribeTable responde', async () => {
+  it('retorna status up cuando la tabla está ACTIVE', async () => {
     const { indicator, mockSend } = makeIndicator();
     mockSend.mockResolvedValueOnce({ Table: { TableStatus: 'ACTIVE' } });
     const result = await indicator.isHealthy('dynamodb');
@@ -39,6 +39,35 @@ describe('DynamoDbHealthIndicator', () => {
     } catch (e: any) {
       expect(e.causes).toMatchObject({
         dynamodb: { message: 'connection refused' },
+      });
+    }
+  });
+
+  it('lanza HealthCheckError cuando la tabla está en CREATING', async () => {
+    const { indicator, mockSend } = makeIndicator();
+    mockSend.mockResolvedValueOnce({ Table: { TableStatus: 'CREATING' } });
+    await expect(indicator.isHealthy('dynamodb')).rejects.toThrow(
+      HealthCheckError,
+    );
+  });
+
+  it('lanza HealthCheckError cuando la tabla está en DELETING', async () => {
+    const { indicator, mockSend } = makeIndicator();
+    mockSend.mockResolvedValueOnce({ Table: { TableStatus: 'DELETING' } });
+    await expect(indicator.isHealthy('dynamodb')).rejects.toThrow(
+      HealthCheckError,
+    );
+  });
+
+  it('incluye el TableStatus en el mensaje de error cuando no está ACTIVE', async () => {
+    expect.assertions(1);
+    const { indicator, mockSend } = makeIndicator();
+    mockSend.mockResolvedValueOnce({ Table: { TableStatus: 'UPDATING' } });
+    try {
+      await indicator.isHealthy('dynamodb');
+    } catch (e: any) {
+      expect(e.causes).toMatchObject({
+        dynamodb: { message: 'Table status is UPDATING, expected ACTIVE' },
       });
     }
   });
