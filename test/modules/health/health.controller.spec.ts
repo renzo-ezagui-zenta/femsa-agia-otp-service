@@ -1,25 +1,25 @@
 import type { HealthCheckResult, HealthCheckService } from '@nestjs/terminus';
 import { HealthController } from '../../../src/modules/health/health.controller';
-import type { ValkeyHealthIndicator } from '../../../src/modules/health/indicators/valkey.health-indicator';
+import type { DynamoDbHealthIndicator } from '../../../src/modules/health/indicators/dynamodb.health-indicator';
 
 const HEALTHY_RESULT: HealthCheckResult = {
   status: 'ok',
-  info: { valkey: { status: 'up' } },
+  info: { dynamodb: { status: 'up' } },
   error: {},
-  details: { valkey: { status: 'up' } },
+  details: { dynamodb: { status: 'up' } },
 };
 
 function makeController() {
-  const mockValkeyIndicator = {
+  const mockDynamoDbIndicator = {
     isHealthy: jest.fn(),
-  } as unknown as jest.Mocked<ValkeyHealthIndicator>;
+  } as unknown as jest.Mocked<DynamoDbHealthIndicator>;
 
   const mockHealth = {
     check: jest.fn().mockResolvedValue(HEALTHY_RESULT),
   } as unknown as jest.Mocked<HealthCheckService>;
 
-  const controller = new HealthController(mockHealth, mockValkeyIndicator);
-  return { controller, mockHealth, mockValkeyIndicator };
+  const controller = new HealthController(mockHealth, mockDynamoDbIndicator);
+  return { controller, mockHealth, mockDynamoDbIndicator };
 }
 
 describe('HealthController', () => {

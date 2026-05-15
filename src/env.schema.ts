@@ -2,8 +2,16 @@ import { z } from 'zod';
 
 export const EnvSchema = z
   .object({
-    VALKEY_URL: z.string().min(1),
+    DYNAMODB_TABLE_NAME: z.string().min(1),
+    DYNAMODB_ENDPOINT: z.string().url().optional(),
     OTP_TTL_SECONDS: z.coerce.number().positive().default(300),
+    OTP_HMAC_SECRET: z.string().min(32),
+    OTP_ENCRYPTION_KEY: z
+      .string()
+      .regex(
+        /^[0-9a-fA-F]{64}$/,
+        'OTP_ENCRYPTION_KEY must be a 64-character hex string (32 bytes)',
+      ),
     AWS_REGION: z.string().min(1),
     AWS_PROFILE: z.string().optional(),
     SES_FROM_ADDRESS: z.string().email(),
