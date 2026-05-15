@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectPinoLogger, PinoLogger } from 'nestjs-pino';
-import { GetCommand, PutCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb';
+import { PutCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb';
+import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import type { OtpSessionData } from '../../domain/entities/otp-session.entity';
 import type {
   OtpSessionRepositoryPort,
@@ -38,42 +39,63 @@ export class DynamoDbOtpSessionAdapter implements OtpSessionRepositoryPort {
     this.logger.debug({ sessionId }, 'OTP session saved');
   }
 
-  async findById(sessionId: string): Promise<SessionLookupResult> {
-    this.logger.debug({ sessionId }, 'looking up OTP session');
+  /**
+   * Atomically deletes the session and returns its data via ReturnValues: ALL_OLD.
+   * ConditionalCheckFailedException means the item was already gone (consumed or
+   * never existed) — only one concurrent caller can win.
+   */
+  async consumeById(sessionId: string): Promise<SessionLookupResult> {
+    this.logger.debug({ sessionId }, 'consuming OTP session');
 
-    const result = await this.dynamoDb.getDocumentClient().send(
-      new GetCommand({
-        TableName: this.tableName,
-        Key: { sessionId },
-      }),
-    );
+    try {
+      const result = await this.dynamoDb.getDocumentClient().send(
+        new DeleteCommand({
+          TableName: this.tableName,
+          Key: { sessionId },
+          ConditionExpression: 'attribute_exists(sessionId)',
+          ReturnValues: 'ALL_OLD',
+        }),
+      );
 
-    if (!result.Item) {
-      this.logger.debug({ sessionId }, 'OTP session not found');
-      return { status: 'not_found' };
+      if (!result.Attributes) {
+        // Should not happen given the condition, but guard anyway
+        this.logger.warn(
+          { sessionId },
+          'OTP session delete returned no attributes',
+        );
+        return { status: 'not_found' };
+      }
+
+      const item = result.Attributes as OtpSessionData & { sessionId: string };
+
+      // Defensa contra TTL lazy de DynamoDB — el item puede seguir
+      // siendo devuelto hasta 48h después de expirar
+      const now = Math.floor(Date.now() / 1000);
+      if (item.expiresAt <= now) {
+        this.logger.warn({ sessionId }, 'OTP session was expired — discarding');
+        return { status: 'expired' };
+      }
+
+      this.logger.debug({ sessionId }, 'OTP session consumed');
+
+      return {
+        status: 'found',
+        data: {
+          otpHash: item.otpHash,
+          customerEncrypted: item.customerEncrypted,
+          expiresAt: item.expiresAt,
+        },
+      };
+    } catch (err) {
+      if (err instanceof ConditionalCheckFailedException) {
+        this.logger.debug(
+          { sessionId },
+          'OTP session not found or already consumed',
+        );
+        return { status: 'not_found' };
+      }
+      throw err;
     }
-
-    const item = result.Item as OtpSessionData & { sessionId: string };
-
-    // Defensa contra TTL lazy de DynamoDB — el item puede seguir
-    // siendo devuelto hasta 48h después de expirar
-    const now = Math.floor(Date.now() / 1000);
-    if (item.expiresAt <= now) {
-      this.logger.warn({ sessionId }, 'OTP session found but already expired — deleting');
-      await this.delete(sessionId);
-      return { status: 'expired' };
-    }
-
-    this.logger.debug({ sessionId }, 'OTP session found');
-
-    return {
-      status: 'found',
-      data: {
-        otpHash: item.otpHash,
-        customerEncrypted: item.customerEncrypted,
-        expiresAt: item.expiresAt,
-      },
-    };
   }
 
   async delete(sessionId: string): Promise<void> {
