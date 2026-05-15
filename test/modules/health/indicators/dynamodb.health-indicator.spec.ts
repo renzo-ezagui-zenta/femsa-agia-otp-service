@@ -31,6 +31,7 @@ describe('DynamoDbHealthIndicator', () => {
   });
 
   it('incluye el mensaje de error en el detalle', async () => {
+    expect.assertions(1);
     const { indicator, mockSend } = makeIndicator();
     mockSend.mockRejectedValueOnce(new Error('connection refused'));
     try {
