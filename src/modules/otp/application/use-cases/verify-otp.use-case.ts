@@ -32,10 +32,14 @@ export class VerifyOtpUseCase {
   async execute(dto: VerifyOtpDto): Promise<VerifyOtpResult> {
     this.logger.debug({ sessionId: dto.sessionId }, 'verify OTP requested');
 
-    const result = await this.sessionRepo.findById(dto.sessionId);
+    // Atomically delete and retrieve — only one concurrent caller can win
+    const result = await this.sessionRepo.consumeById(dto.sessionId);
 
     if (result.status === 'not_found') {
-      this.logger.warn({ sessionId: dto.sessionId }, 'session not found');
+      this.logger.warn(
+        { sessionId: dto.sessionId },
+        'session not found or already consumed',
+      );
       throw new NotFoundException({ error: 'SESSION_NOT_FOUND' });
     }
 
@@ -50,27 +54,23 @@ export class VerifyOtpUseCase {
     const incomingHash = computeHmac(dto.code, hmacSecret);
 
     if (incomingHash !== session.otpHash) {
-      this.logger.warn(
-        { sessionId: dto.sessionId },
-        'invalid OTP code — deleting session',
-      );
-      await this.sessionRepo.delete(dto.sessionId);
+      // Session is already deleted by consumeById — no extra delete needed
+      this.logger.warn({ sessionId: dto.sessionId }, 'invalid OTP code');
       throw new BadRequestException({ error: 'INVALID_CODE' });
     }
 
     let customer: Customer;
     try {
-      customer = JSON.parse(decrypt(session.customerEncrypted, encryptionKey)) as Customer;
+      customer = JSON.parse(
+        decrypt(session.customerEncrypted, encryptionKey),
+      ) as Customer;
     } catch {
       this.logger.error(
         { sessionId: dto.sessionId },
-        'failed to decrypt customer data — deleting session',
+        'failed to decrypt customer data',
       );
-      await this.sessionRepo.delete(dto.sessionId);
       throw new BadRequestException({ error: 'SESSION_CORRUPTED' });
     }
-
-    await this.sessionRepo.delete(dto.sessionId);
 
     this.logger.info(
       { sessionId: dto.sessionId, customerId: customer.id },

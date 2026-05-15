@@ -23,11 +23,24 @@ export class DynamoDbHealthIndicator extends HealthIndicator {
     try {
       // DescribeTable es la operación más ligera para verificar conectividad
       // y existencia de la tabla en un solo call
-      await this.dynamoDb
+      const response = await this.dynamoDb
         .getClient()
         .send(new DescribeTableCommand({ TableName: tableName }));
+
+      const tableStatus = response.Table?.TableStatus;
+
+      if (tableStatus !== 'ACTIVE') {
+        throw new HealthCheckError(
+          'DynamoDB health check failed',
+          this.getStatus(key, false, {
+            message: `Table status is ${tableStatus ?? 'UNKNOWN'}, expected ACTIVE`,
+          }),
+        );
+      }
+
       return this.getStatus(key, true);
     } catch (err) {
+      if (err instanceof HealthCheckError) throw err;
       throw new HealthCheckError(
         'DynamoDB health check failed',
         this.getStatus(key, false, { message: (err as Error).message }),
