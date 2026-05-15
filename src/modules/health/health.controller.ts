@@ -1,17 +1,19 @@
 import { Controller, Get } from '@nestjs/common';
 import { HealthCheck, HealthCheckService } from '@nestjs/terminus';
-import { ValkeyHealthIndicator } from './indicators/valkey.health-indicator';
+import { DynamoDbHealthIndicator } from './indicators/dynamodb.health-indicator';
 
 @Controller('health')
 export class HealthController {
   constructor(
     private readonly health: HealthCheckService,
-    private readonly valkeyIndicator: ValkeyHealthIndicator,
+    private readonly dynamoDbIndicator: DynamoDbHealthIndicator,
   ) {}
 
   @Get()
   @HealthCheck()
   check() {
-    return this.health.check([() => this.valkeyIndicator.isHealthy('valkey')]);
+    return this.health.check([
+      () => this.dynamoDbIndicator.isHealthy('dynamodb'),
+    ]);
   }
 }
