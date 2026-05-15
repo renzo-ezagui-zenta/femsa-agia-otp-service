@@ -156,7 +156,32 @@ No Cognito, no SQS, no Valkey.
 **TTL attribute**: `expiresAt` (Number, Unix epoch seconds)
 **Billing**: PAY_PER_REQUEST
 
-Created by `make init-db` (also enables TTL automatically).
+The table is created by the scaffolding repo (`femsa-agia-mcp-scaffolding`):
+
+```bash
+# From the scaffolding root:
+make init-db
+```
+
+If you don't have the scaffolding, create it manually:
+
+```bash
+aws dynamodb create-table \
+  --table-name mcp-femsa-dev-otp-sessions \
+  --attribute-definitions AttributeName=sessionId,AttributeType=S \
+  --key-schema AttributeName=sessionId,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST \
+  --profile femsa
+
+aws dynamodb wait table-exists \
+  --table-name mcp-femsa-dev-otp-sessions \
+  --profile femsa
+
+aws dynamodb update-time-to-live \
+  --table-name mcp-femsa-dev-otp-sessions \
+  --time-to-live-specification "Enabled=true,AttributeName=expiresAt" \
+  --profile femsa
+```
 
 ---
 
