@@ -10,6 +10,7 @@ import type { NotificationPort } from '../../domain/ports/notification.port';
 import type { OtpSessionRepositoryPort } from '../../domain/ports/otp-session-repository.port';
 import { NOTIFICATION_PORT, OTP_SESSION_REPOSITORY_PORT } from '../../tokens';
 import type { SendOtpDto } from '../dto/send-otp.schema';
+import { computeHmac, encrypt } from '../../../../shared/crypto/otp-crypto';
 
 export interface SendOtpResult {
   sessionId: string;
@@ -43,6 +44,9 @@ export class SendOtpUseCase {
     );
 
     const ttl = this.config.get<number>('OTP_TTL_SECONDS', 300);
+    const hmacSecret = this.config.getOrThrow<string>('OTP_HMAC_SECRET');
+    const encryptionKey = this.config.getOrThrow<string>('OTP_ENCRYPTION_KEY');
+
     const otp = formatOtpCode(randomInt(0, 1_000_000));
     const session = OtpSession.create(dto.customer, dto.requestedVia, ttl, otp);
 
@@ -55,7 +59,18 @@ export class SendOtpUseCase {
       'OTP session created',
     );
 
-    await this.sessionRepo.save(session.sessionId, session.toData(), ttl);
+    const otpHash = computeHmac(otp, hmacSecret);
+    const customerEncrypted = encrypt(
+      JSON.stringify(session.customer),
+      encryptionKey,
+    );
+
+    await this.sessionRepo.save(session.sessionId, {
+      otpHash,
+      customerEncrypted,
+      expiresAt: session.expiresAtEpoch,
+    });
+
     this.logger.debug({ sessionId: session.sessionId }, 'session persisted');
 
     const destination =

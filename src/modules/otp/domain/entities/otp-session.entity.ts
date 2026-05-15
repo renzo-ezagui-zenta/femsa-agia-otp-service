@@ -11,11 +11,9 @@ export interface Customer {
 }
 
 export interface OtpSessionData {
-  customer: Customer;
-  requestedVia: RequestedVia;
-  deliveryChannel: DeliveryChannel;
-  otp: string;
-  verified: boolean;
+  otpHash: string;
+  customerEncrypted: string;
+  expiresAt: number;
 }
 
 const DELIVERY_CHANNEL_MAP: Record<RequestedVia, DeliveryChannel> = {
@@ -38,7 +36,6 @@ export class OtpSession {
   readonly requestedVia: RequestedVia;
   readonly deliveryChannel: DeliveryChannel;
   readonly otp: string;
-  readonly verified: boolean;
   readonly expiresAt: Date;
 
   private constructor(props: {
@@ -47,7 +44,6 @@ export class OtpSession {
     requestedVia: RequestedVia;
     deliveryChannel: DeliveryChannel;
     otp: string;
-    verified: boolean;
     expiresAt: Date;
   }) {
     this.sessionId = props.sessionId;
@@ -55,7 +51,6 @@ export class OtpSession {
     this.requestedVia = props.requestedVia;
     this.deliveryChannel = props.deliveryChannel;
     this.otp = props.otp;
-    this.verified = props.verified;
     this.expiresAt = props.expiresAt;
   }
 
@@ -71,18 +66,12 @@ export class OtpSession {
       requestedVia,
       deliveryChannel: DELIVERY_CHANNEL_MAP[requestedVia],
       otp,
-      verified: false,
       expiresAt: new Date(Date.now() + ttlSeconds * 1000),
     });
   }
 
-  toData(): OtpSessionData {
-    return {
-      customer: this.customer,
-      requestedVia: this.requestedVia,
-      deliveryChannel: this.deliveryChannel,
-      otp: this.otp,
-      verified: this.verified,
-    };
+  /** epoch Unix en segundos — requerido por DynamoDB TTL */
+  get expiresAtEpoch(): number {
+    return Math.floor(this.expiresAt.getTime() / 1000);
   }
 }
