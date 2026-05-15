@@ -3,6 +3,7 @@ import {
   Inject,
   NotFoundException,
   BadRequestException,
+  GoneException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectPinoLogger, PinoLogger } from 'nestjs-pino';
@@ -31,16 +32,19 @@ export class VerifyOtpUseCase {
   async execute(dto: VerifyOtpDto): Promise<VerifyOtpResult> {
     this.logger.debug({ sessionId: dto.sessionId }, 'verify OTP requested');
 
-    const session = await this.sessionRepo.findById(dto.sessionId);
+    const result = await this.sessionRepo.findById(dto.sessionId);
 
-    if (!session) {
-      this.logger.warn(
-        { sessionId: dto.sessionId },
-        'session not found or expired',
-      );
+    if (result.status === 'not_found') {
+      this.logger.warn({ sessionId: dto.sessionId }, 'session not found');
       throw new NotFoundException({ error: 'SESSION_NOT_FOUND' });
     }
 
+    if (result.status === 'expired') {
+      this.logger.warn({ sessionId: dto.sessionId }, 'session expired');
+      throw new GoneException({ error: 'SESSION_EXPIRED' });
+    }
+
+    const session = result.data;
     const hmacSecret = this.config.getOrThrow<string>('OTP_HMAC_SECRET');
     const encryptionKey = this.config.getOrThrow<string>('OTP_ENCRYPTION_KEY');
     const incomingHash = computeHmac(dto.code, hmacSecret);
@@ -56,9 +60,7 @@ export class VerifyOtpUseCase {
 
     let customer: Customer;
     try {
-      customer = JSON.parse(
-        decrypt(session.customerEncrypted, encryptionKey),
-      ) as Customer;
+      customer = JSON.parse(decrypt(session.customerEncrypted, encryptionKey)) as Customer;
     } catch {
       this.logger.error(
         { sessionId: dto.sessionId },

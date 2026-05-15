@@ -90,7 +90,8 @@ Caller → { sessionId: "<uuid>", code: "123456" }
 
 | Outcome | HTTP | Behaviour |
 |---------|------|-----------|
-| Session not found / expired | `404` `SESSION_NOT_FOUND` | — |
+| Session not found | `404` `SESSION_NOT_FOUND` | — |
+| Session expired | `410` `SESSION_EXPIRED` | Adapter deletes the item immediately |
 | Code incorrect | `400` `INVALID_CODE` | Session **deleted immediately** (single attempt, no retries) |
 | Customer data corrupted | `400` `SESSION_CORRUPTED` | Session **deleted immediately** |
 | Code correct | `200` `{ ok: true, sessionId, customer }` | Session **deleted immediately** (delete-on-use) |

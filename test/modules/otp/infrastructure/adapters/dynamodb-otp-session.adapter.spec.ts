@@ -44,33 +44,55 @@ describe('DynamoDbOtpSessionAdapter', () => {
   });
 
   describe('findById()', () => {
-    it('retorna null cuando el item no existe', async () => {
+    it('retorna { status: "not_found" } cuando el item no existe', async () => {
       const { adapter, mockSend } = makeAdapter();
       mockSend.mockResolvedValueOnce({ Item: undefined });
       const result = await adapter.findById('sess-missing');
-      expect(result).toBeNull();
+      expect(result).toEqual({ status: 'not_found' });
     });
 
-    it('retorna null cuando el item está expirado (defensa TTL lazy)', async () => {
+    it('retorna { status: "expired" } y llama delete cuando el item está expirado', async () => {
       const { adapter, mockSend } = makeAdapter();
-      mockSend.mockResolvedValueOnce({
-        Item: {
-          sessionId: 'sess-1',
-          ...SESSION_DATA,
-          expiresAt: Math.floor(Date.now() / 1000) - 10, // expirado
-        },
-      });
+      // First call: GetCommand → expired item; second call: DeleteCommand
+      mockSend
+        .mockResolvedValueOnce({
+          Item: {
+            sessionId: 'sess-1',
+            ...SESSION_DATA,
+            expiresAt: Math.floor(Date.now() / 1000) - 10,
+          },
+        })
+        .mockResolvedValueOnce({});
+
       const result = await adapter.findById('sess-1');
-      expect(result).toBeNull();
+
+      expect(result).toEqual({ status: 'expired' });
+      expect(mockSend).toHaveBeenCalledTimes(2);
+      const deleteCommand = mockSend.mock.calls[1][0];
+      expect(deleteCommand.input.TableName).toBe(TABLE);
+      expect(deleteCommand.input.Key).toEqual({ sessionId: 'sess-1' });
     });
 
-    it('retorna OtpSessionData cuando el item existe y no está expirado', async () => {
+    it('retorna { status: "found", data } cuando el item existe y no está expirado', async () => {
       const { adapter, mockSend } = makeAdapter();
       mockSend.mockResolvedValueOnce({
         Item: { sessionId: 'sess-1', ...SESSION_DATA },
       });
       const result = await adapter.findById('sess-1');
-      expect(result).toEqual(SESSION_DATA);
+      expect(result).toEqual({ status: 'found', data: SESSION_DATA });
+    });
+
+    it('no incluye sessionId en el data retornado', async () => {
+      const { adapter, mockSend } = makeAdapter();
+      mockSend.mockResolvedValueOnce({
+        Item: { sessionId: 'sess-1', ...SESSION_DATA },
+      });
+      const result = await adapter.findById('sess-1');
+      if (result.status === 'found') {
+        expect(result.data).not.toHaveProperty('sessionId');
+      } else {
+        fail('expected status found');
+      }
     });
   });
 

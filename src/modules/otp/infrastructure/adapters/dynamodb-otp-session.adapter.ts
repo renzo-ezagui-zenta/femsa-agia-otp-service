@@ -3,7 +3,10 @@ import { ConfigService } from '@nestjs/config';
 import { InjectPinoLogger, PinoLogger } from 'nestjs-pino';
 import { GetCommand, PutCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb';
 import type { OtpSessionData } from '../../domain/entities/otp-session.entity';
-import type { OtpSessionRepositoryPort } from '../../domain/ports/otp-session-repository.port';
+import type {
+  OtpSessionRepositoryPort,
+  SessionLookupResult,
+} from '../../domain/ports/otp-session-repository.port';
 import { DynamoDBProvider } from '../../../../shared/dynamodb/dynamodb.provider';
 
 @Injectable()
@@ -35,7 +38,7 @@ export class DynamoDbOtpSessionAdapter implements OtpSessionRepositoryPort {
     this.logger.debug({ sessionId }, 'OTP session saved');
   }
 
-  async findById(sessionId: string): Promise<OtpSessionData | null> {
+  async findById(sessionId: string): Promise<SessionLookupResult> {
     this.logger.debug({ sessionId }, 'looking up OTP session');
 
     const result = await this.dynamoDb.getDocumentClient().send(
@@ -47,7 +50,7 @@ export class DynamoDbOtpSessionAdapter implements OtpSessionRepositoryPort {
 
     if (!result.Item) {
       this.logger.debug({ sessionId }, 'OTP session not found');
-      return null;
+      return { status: 'not_found' };
     }
 
     const item = result.Item as OtpSessionData & { sessionId: string };
@@ -56,16 +59,20 @@ export class DynamoDbOtpSessionAdapter implements OtpSessionRepositoryPort {
     // siendo devuelto hasta 48h después de expirar
     const now = Math.floor(Date.now() / 1000);
     if (item.expiresAt <= now) {
-      this.logger.warn({ sessionId }, 'OTP session found but already expired');
-      return null;
+      this.logger.warn({ sessionId }, 'OTP session found but already expired — deleting');
+      await this.delete(sessionId);
+      return { status: 'expired' };
     }
 
     this.logger.debug({ sessionId }, 'OTP session found');
 
     return {
-      otpHash: item.otpHash,
-      customerEncrypted: item.customerEncrypted,
-      expiresAt: item.expiresAt,
+      status: 'found',
+      data: {
+        otpHash: item.otpHash,
+        customerEncrypted: item.customerEncrypted,
+        expiresAt: item.expiresAt,
+      },
     };
   }
 
